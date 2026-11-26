@@ -15,6 +15,21 @@ export const s = {
     background: "var(--border)",
     margin: "0 2px",
   } satisfies CSSProperties,
+  severityGroup: { display: "flex", gap: 8, flexWrap: "wrap" } satisfies CSSProperties,
+  /** Active chip is filled with its severity colour; the others are outline only. */
+  severityChip: (color: string, active: boolean) =>
+    ({
+      padding: "4px 12px",
+      borderRadius: 99,
+      border: `1px solid ${color}`,
+      background: active ? color : "transparent",
+      color: active ? "#fff" : color,
+      fontSize: 12,
+      fontWeight: 600,
+      letterSpacing: "0.04em",
+      textTransform: "uppercase",
+      cursor: "pointer",
+    }) satisfies CSSProperties,
   toggleGroup: {
     marginLeft: "auto",
     display: "flex",
