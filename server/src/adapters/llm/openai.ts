@@ -91,6 +91,7 @@ export class OpenAIProvider implements LLMProvider {
     const messages = [...req.messages];
     let tokensIn = 0;
     let tokensOut = 0;
+    let allHaveTokens = true;
     let lastRaw = '';
 
     for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
@@ -109,8 +110,18 @@ export class OpenAIProvider implements LLMProvider {
         ),
       );
       lastRaw = res.choices?.[0]?.message?.content ?? '';
-      tokensIn += res.usage?.prompt_tokens ?? 0;
-      tokensOut += res.usage?.completion_tokens ?? 0;
+      const promptTokens = res.usage?.prompt_tokens;
+      const completionTokens = res.usage?.completion_tokens;
+      // Absent, empty or all-zero usage: a real call always consumes tokens.
+      if (
+        typeof promptTokens !== 'number' ||
+        typeof completionTokens !== 'number' ||
+        promptTokens + completionTokens === 0
+      ) {
+        allHaveTokens = false;
+      }
+      tokensIn += promptTokens ?? 0;
+      tokensOut += completionTokens ?? 0;
 
       const parsed = parseWithRepair(req.schema, lastRaw);
       if (parsed.ok) {
@@ -119,7 +130,8 @@ export class OpenAIProvider implements LLMProvider {
           model: req.model,
           tokensIn,
           tokensOut,
-          costUsd: estimateCost(req.model, tokensIn, tokensOut),
+          // Unknown if any attempt hid its tokens: an estimate would under-report.
+          costUsd: allHaveTokens ? estimateCost(req.model, tokensIn, tokensOut) : null,
           raw: lastRaw,
           attempts: attempt,
         };

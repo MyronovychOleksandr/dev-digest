@@ -63,6 +63,12 @@ export function FindingsTab({
     [onDelete],
   );
 
+  // Cost + token usage live on the run row, not on the review: join by run_id.
+  const runById = React.useMemo(
+    () => new Map((prRuns ?? []).map((r) => [r.run_id, r])),
+    [prRuns],
+  );
+
   // Timeline → Review-runs navigation: clicking an agent name in the timeline
   // opens + scrolls to that run's accordion below. The nonce re-triggers the
   // scroll even when the same run is clicked twice.
@@ -158,6 +164,7 @@ export function FindingsTab({
           <ReviewRunAccordion
             key={review.id}
             review={review}
+            run={review.run_id ? runById.get(review.run_id) : undefined}
             prId={prId}
             defaultOpen={i === 0}
             repoFullName={repoFullName}
