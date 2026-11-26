@@ -62,7 +62,10 @@ export class OpenRouterProvider implements LLMProvider {
     const messages = [...req.messages];
     let tokensIn = 0;
     let tokensOut = 0;
-    let costFromApi: number | null = null;
+    let costFromApi = 0;
+    // Cost is only trustworthy when EVERY attempt reported what it consumed.
+    let allHaveTokens = true;
+    let allHaveApiCost = true;
     let lastRaw = '';
 
     for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
@@ -91,20 +94,38 @@ export class OpenRouterProvider implements LLMProvider {
         throw new Error(`OpenRouter returned no choices for ${req.schemaName}${errMsg ? `: ${errMsg}` : ''}`);
       }
       lastRaw = choice.message?.content ?? '';
-      tokensIn += res.usage?.prompt_tokens ?? 0;
-      tokensOut += res.usage?.completion_tokens ?? 0;
+      const promptTokens = res.usage?.prompt_tokens;
+      const completionTokens = res.usage?.completion_tokens;
+      // Absent, empty or all-zero usage: a real call always consumes tokens.
+      if (
+        typeof promptTokens !== 'number' ||
+        typeof completionTokens !== 'number' ||
+        promptTokens + completionTokens === 0
+      ) {
+        allHaveTokens = false;
+      }
+      tokensIn += promptTokens ?? 0;
+      tokensOut += completionTokens ?? 0;
       // `usage.cost` is an OpenRouter extension (USD), absent from the OpenAI SDK type.
       const apiCost = (res.usage as { cost?: number } | null | undefined)?.cost;
-      if (typeof apiCost === 'number') costFromApi = (costFromApi ?? 0) + apiCost;
+      if (typeof apiCost === 'number') costFromApi += apiCost;
+      else allHaveApiCost = false;
 
       const parsed = parseWithRepair(req.schema, lastRaw);
       if (parsed.ok) {
+        // A partial API sum would under-report → estimate over all tokens instead;
+        // without all tokens the cost is unknown (never an estimate that reads as free).
+        const costUsd = allHaveApiCost
+          ? costFromApi
+          : allHaveTokens
+            ? (this.estimateCost?.(req.model, tokensIn, tokensOut) ?? null)
+            : null;
         return {
           data: parsed.data,
           model: req.model,
           tokensIn,
           tokensOut,
-          costUsd: costFromApi ?? this.estimateCost?.(req.model, tokensIn, tokensOut) ?? null,
+          costUsd,
           raw: lastRaw,
           attempts: attempt,
         };

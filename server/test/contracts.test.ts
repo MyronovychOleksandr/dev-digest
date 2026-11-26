@@ -166,6 +166,13 @@ describe('AI contracts parse fixtures', () => {
       log: [{ t: '00.00', kind: 'info', msg: 'started' }],
     });
     expect(trace.tool_calls).toHaveLength(1);
+    // traces saved before cost was recorded have no cost_usd
+    expect(trace.stats.cost_usd).toBeUndefined();
+
+    for (const cost_usd of [0.0123, null]) {
+      const withCost = RunTrace.parse({ ...trace, stats: { ...trace.stats, cost_usd } });
+      expect(withCost.stats.cost_usd).toBe(cost_usd);
+    }
   });
 });
 

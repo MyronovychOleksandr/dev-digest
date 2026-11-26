@@ -4,7 +4,12 @@ import { waitForPrRuns } from './helpers/runs.js';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/platform/config.js';
 import { seed } from '../src/db/seed.js';
-import { MockLLMProvider, MockEmbedder, MockGitClient } from '../src/adapters/mocks.js';
+import {
+  MockLLMProvider,
+  MockEmbedder,
+  MockGitClient,
+  MockGitHubClient,
+} from '../src/adapters/mocks.js';
 import * as t from '../src/db/schema.js';
 import { eq } from 'drizzle-orm';
 import type { Review } from '@devdigest/shared';
@@ -110,15 +115,24 @@ d('A2 reviews + agents (Testcontainers pg)', () => {
     await pg?.stop();
   });
 
-  function appWith(structured: unknown, provider: 'openai' | 'anthropic' = 'openai') {
+  function appWith(
+    structured: unknown,
+    provider: 'openai' | 'anthropic' = 'openai',
+    costUsd?: number | null,
+  ) {
     return buildApp({
       config: config(),
       db: pg.handle.db,
       overrides: {
         embedder: new MockEmbedder(),
         git: new MockGitClient({ diff: DIFF }),
+        // no PRs to sync: the list endpoint must never reach the real GitHub
+        github: new MockGitHubClient({ pulls: [] }),
         llm: {
-          [provider]: new MockLLMProvider(provider, { structured }),
+          [provider]: new MockLLMProvider(provider, {
+            structured,
+            ...(costUsd !== undefined ? { costUsd } : {}),
+          }),
         },
       },
     });
@@ -209,6 +223,100 @@ d('A2 reviews + agents (Testcontainers pg)', () => {
     expect(run!.findingsCount).toBe(1);
     expect(run!.grounding).toBe('1/2 passed');
 
+    // cost is recorded on the run, in the trace and in the run log
+    expect(run!.costUsd).toBe(0.001);
+    expect(trace.stats.cost_usd).toBe(0.001);
+    expect(trace.log.map((l: { msg: string }) => l.msg)).toContain(
+      'Cost: $0.00100000 · tokens 100→50',
+    );
+    const history = (await app.inject({ method: 'GET', url: `/pulls/${pr.id}/runs` })).json();
+    expect(history[0].cost_usd).toBe(0.001);
+
+    await app.close();
+  });
+
+  /** Run one openai agent on a fresh PR and return everything that carries cost. */
+  async function runOnce(app: Awaited<ReturnType<typeof appWith>>, agentName: string) {
+    const { repo, pr } = await setupRepoAndPr(pg.handle.db, workspaceId);
+    const agent = (
+      await app.inject({
+        method: 'POST',
+        url: '/agents',
+        payload: { name: agentName, provider: 'openai', model: 'gpt-4.1', system_prompt: 's' },
+      })
+    ).json();
+    const body = (
+      await app.inject({ method: 'POST', url: `/pulls/${pr.id}/review`, payload: { agentId: agent.id } })
+    ).json();
+    const runId: string = body.runs[0].run_id;
+    await waitForPrRuns(pg.handle.db, pr.id, { expected: 1 });
+    // the trace is saved after the run row turns terminal
+    let trace = await app.inject({ method: 'GET', url: `/runs/${runId}/trace` });
+    for (let i = 0; i < 100 && trace.statusCode !== 200; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+      trace = await app.inject({ method: 'GET', url: `/runs/${runId}/trace` });
+    }
+    const history = (await app.inject({ method: 'GET', url: `/pulls/${pr.id}/runs` })).json();
+    const list = (await app.inject({ method: 'GET', url: `/repos/${repo.id}/pulls` })).json();
+    return { run: history[0], trace: trace.json(), listed: list[0] };
+  }
+
+  it('cost: an unknown price stays null everywhere (never 0)', async () => {
+    const app = await appWith(REVIEW_FIXTURE, 'openai', null);
+    const { run, trace, listed } = await runOnce(app, 'NoPrice');
+
+    expect(run.status).toBe('done');
+    expect(run.cost_usd).toBeNull();
+    expect(trace.stats.cost_usd).toBeNull();
+    expect(trace.log.map((l: { msg: string }) => l.msg)).toContain('Cost: n/a · tokens 100→50');
+    expect(listed.cost_usd).toBeNull();
+    await app.close();
+  });
+
+  it('cost: a failed run records no cost', async () => {
+    // an invalid fixture makes the mock provider throw
+    const app = await appWith({});
+    const { run, trace, listed } = await runOnce(app, 'Failing');
+
+    expect(run.status).toBe('failed');
+    expect(run.cost_usd).toBeNull();
+    expect(trace.stats.cost_usd).toBeNull();
+    expect(listed.cost_usd).toBeNull();
+    await app.close();
+  });
+
+  it('cost: the PR list shows the cost of the run behind the LATEST review', async () => {
+    const app = await appWith(REVIEW_FIXTURE);
+    const { repo, pr } = await setupRepoAndPr(pg.handle.db, workspaceId);
+    const listed = async () =>
+      (await app.inject({ method: 'GET', url: `/repos/${repo.id}/pulls` })).json()[0];
+    const addReview = async (createdAt: string, costUsd: number | null | 'no-run') => {
+      let runId: string | null = null;
+      if (costUsd !== 'no-run') {
+        const [run] = await pg.handle.db
+          .insert(t.agentRuns)
+          .values({ workspaceId, prId: pr.id, status: 'done', costUsd })
+          .returning();
+        runId = run!.id;
+      }
+      await pg.handle.db.insert(t.reviews).values({
+        workspaceId,
+        prId: pr.id,
+        runId,
+        kind: 'review',
+        score: 80,
+        createdAt: new Date(createdAt),
+      });
+    };
+
+    expect((await listed()).cost_usd).toBeNull(); // never reviewed
+
+    await addReview('2026-06-02T00:00:00Z', 0.0123);
+    await addReview('2026-06-01T00:00:00Z', 0.5); // inserted later, but older
+    expect((await listed()).cost_usd).toBe(0.0123);
+
+    await addReview('2026-06-03T00:00:00Z', 'no-run'); // e.g. a seeded review
+    expect((await listed()).cost_usd).toBeNull(); // no fallback to an older price
     await app.close();
   });
 

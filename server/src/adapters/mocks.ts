@@ -53,6 +53,8 @@ export interface MockLLMOptions {
   structuredBySchema?: Record<string, unknown>;
   completionText?: string;
   embedding?: number[];
+  /** Cost reported by completeStructured (default 0.001); null = unknown. */
+  costUsd?: number | null;
 }
 
 export class MockLLMProvider implements LLMProvider {
@@ -98,7 +100,7 @@ export class MockLLMProvider implements LLMProvider {
       model: req.model,
       tokensIn: 100,
       tokensOut: 50,
-      costUsd: 0.001,
+      costUsd: this.opts.costUsd === undefined ? 0.001 : this.opts.costUsd,
       raw: JSON.stringify(fixture),
       attempts: 1,
     };

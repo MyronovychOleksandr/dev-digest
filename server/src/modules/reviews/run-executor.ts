@@ -34,6 +34,12 @@ export type RunOutcome = {
   raw: Review;
 };
 
+/** Run-log line for the recorded cost, at enough precision to match provider billing. */
+function costLine(costUsd: number | null, tokensIn: number, tokensOut: number): string {
+  const cost = costUsd == null ? 'n/a' : `$${costUsd.toFixed(8)}`;
+  return `Cost: ${cost} · tokens ${tokensIn}→${tokensOut}`;
+}
+
 /**
  * Owns the background execution of queued agent runs (extracted from
  * ReviewService; behaviour unchanged). Loads the diff + intent once, then
@@ -210,7 +216,7 @@ export class ReviewRunExecutor {
           if (this.container.runBus.isCancelled(runId)) throw new RunCancelledError();
         },
       });
-      const { tokensIn, tokensOut, grounding } = outcome;
+      const { tokensIn, tokensOut, costUsd, grounding } = outcome;
 
       const keptFindings = outcome.review.findings;
 
@@ -245,12 +251,16 @@ export class ReviewRunExecutor {
         durationMs,
         tokensIn,
         tokensOut,
+        costUsd,
         findingsCount: findingRows.length,
         grounding,
         score: outcome.review.score,
         blockers,
         error: null,
       });
+
+      // Must precede the trace: its `log` is a snapshot of the buffer.
+      runLog.result(costLine(costUsd, tokensIn, tokensOut));
 
       const trace: RunTrace = {
         config: {
@@ -265,6 +275,7 @@ export class ReviewRunExecutor {
           duration_ms: durationMs,
           tokens_in: tokensIn,
           tokens_out: tokensOut,
+          cost_usd: costUsd,
           findings: findingRows.length,
           grounding,
         },
@@ -421,7 +432,7 @@ export class ReviewRunExecutor {
         pr: pull.number,
         source: 'local',
       },
-      stats: { duration_ms: durationMs, tokens_in: 0, tokens_out: 0, findings: 0, grounding },
+      stats: { duration_ms: durationMs, tokens_in: 0, tokens_out: 0, cost_usd: null, findings: 0, grounding },
       prompt_assembly: { system: agent.systemPrompt, skills: null, memory: null, specs: null, user: '' },
       tool_calls: [],
       raw_output: '',

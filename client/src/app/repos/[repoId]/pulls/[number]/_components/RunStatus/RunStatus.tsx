@@ -20,9 +20,15 @@ export function RunStatus({
   const { events, running } = useRunEvents(runIds);
   const wasRunning = React.useRef(false);
 
+  // Fire once per running → settled transition. `onDone` gets a new identity on
+  // every parent render, so the flag is cleared before calling it.
   React.useEffect(() => {
-    if (running) wasRunning.current = true;
-    if (!running && wasRunning.current) onDone?.();
+    if (running) {
+      wasRunning.current = true;
+    } else if (wasRunning.current) {
+      wasRunning.current = false;
+      onDone?.();
+    }
   }, [running, onDone]);
 
   if (runIds.length === 0) return null;

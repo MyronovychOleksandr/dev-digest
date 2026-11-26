@@ -157,6 +157,8 @@ export default function PRDetailPage() {
               invalidateActiveRuns();
               invalidateRunHistory();
               refetchReviews();
+              // the PR list shows the latest review's score + cost
+              qc.invalidateQueries({ queryKey: ["pulls", repoId] });
             }}
           />
         )}
