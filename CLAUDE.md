@@ -40,7 +40,13 @@ Per package (run inside the package directory; there are no root or lint scripts
 
 ## Module docs
 
-Each module: `docs/` = module documentation, `specs/` = feature specs, `INSIGHTS.md` = lessons (a skill will create it; don't create it by hand).
+Each module: `docs/` = module documentation, `specs/` = feature specs, `INSIGHTS.md` = lessons (only the `engineering-insights` skill creates and appends to it).
+
+## Insights loop
+
+- Start: before working in `client/`, `server/`, `reviewer-core/` or `e2e/`, read that module's `INSIGHTS.md` (if present) and treat it as high-confidence guidance.
+- During: as soon as you confirm something non-obvious, record it with `engineering-insights`.
+- End: before reporting a non-trivial task as done, run `engineering-insights`. Writing nothing is a valid result.
 
 ## Cross-package
 
@@ -78,4 +84,4 @@ Each module: `docs/` = module documentation, `specs/` = feature specs, `INSIGHTS
 - Working on tests or CI: `TESTING.md`
 - Editing agent prompts: `docs/agent-prompts/README.md`
 - Choosing a model: `docs/agent-prompts/choosing-a-model.md`
-- Working in a module: its `README.md` and `INSIGHTS.md` (if present)
+- Working in a module: its `README.md`
